@@ -1,207 +1,350 @@
-<h1 align="center">多智能体客服系统</h1>
+# GlobalShop AI 客服中心
 
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-yellow.svg" alt="License Apache 2.0"></a>
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10%2B-blue.svg" alt="Python 3.10+"></a>
-  <a href="https://flask.palletsprojects.com/"><img src="https://img.shields.io/badge/Flask-%E2%89%A52.3-339933.svg" alt="Flask"></a>
-  <a href="https://python.langchain.com/"><img src="https://img.shields.io/badge/langchain--core-%E2%89%A51.3-green.svg" alt="langchain-core"></a>
-  <a href="https://github.com/langchain-ai/langgraph"><img src="https://img.shields.io/badge/LangGraph-%E2%89%A51.0-purple.svg" alt="LangGraph"></a>
-</p>
+> 面向跨境电商场景的多智能体智能客服 · 基于开源项目二次开发
 
-<p align="center"><em>模块化多智能体路由 · Flask Web 前台 · LangGraph 会话编排</em></p>
+一个可以直接本地运行的跨境电商客服 Demo：用户可以用中文或英文咨询商品、物流、退换货、关税和售后问题，系统会自动识别意图和语言，路由到对应的专家智能体，并用同一语言回复。
 
+---
 
-## 项目概述
+## 项目来源与致谢
 
-这是一个基于LangGraph构建的多智能体客服系统，支持产品咨询、技术支持、账单处理、投诉处理等多种业务场景。系统采用模块化设计，每个智能体独立运行，通过配置文件定义工作流程。
+本项目基于开源项目 **「多智能体客服系统」（customer-service-ai-agent）** 二次开发，保留其 Apache-2.0 许可证（见 [LICENSE](LICENSE)）与 LangGraph 多智能体架构，在此之上做了跨境电商方向的业务改造。
 
-## 运行效果
+与原项目相比的主要变化：
 
-### 首页
-![首页](./doc/chat-index.jpg)
+| 维度 | 原项目 | 本项目 |
+|---|---|---|
+| 业务语境 | 国内电商（人民币、发票、门店） | 跨境电商（USD、国际物流、关税、VAT） |
+| 智能体 | 产品/技术/账单/投诉/综合 | 新增 **物流追踪**，其余五个按跨境场景重写 |
+| 知识来源 | 每个智能体硬编码字典 | 统一 `knowledge/` 知识库 + bge-m3 向量检索 |
+| 语言 | 仅中文 | **中英自动识别**，按用户语言回复 |
+| 前端 | 通用客服 UI | GlobalShop 品牌与跨境场景快捷问题 |
 
-### 多轮对话
-![多轮对话](./doc/chat-his.jpg)
+---
 
-### 工作流
-![工作流](./doc/chat-graph.jpg)
+## ✨ 核心功能
 
-## 项目结构
+### 1. 跨境电商客服人设
+所有智能体共享同一段人设（[persona.py](persona.py)）：专业、热情、懂国际物流与海关政策，不臆造轨迹/价格/法律建议，遇到不确定会给出下一步动作。
+
+### 2. 🚚 物流追踪（本项目新增）
+- 识别 `物流 / 快递 / 单号 / 包裹 / tracking / parcel / customs` 等中英关键词
+- 从自然语言里提取运单号（支持 `YT123456789CN` 这类 UPU S10、专线号、纯数字单号）
+- **规则命中后不调用大模型**，直接返回稳定话术：*"您的包裹已到达目的国海关，正在清关中"*，并附清关说明与时效
+- 实现见 [tools/logistics.py](tools/logistics.py)，替换 `track_package()` 即可接入真实承运商 API
+
+### 3. 🌐 多语言支持（本项目新增）
+- [i18n.py](i18n.py) 判断提问语言：含中文 → 中文回复；纯英文/其他 → 英文回复
+- 语言规则会被写进每次系统提示；即使同一会话中用户切换语言，下一轮也会跟着切换
+- 兜底文案、护栏话术同样双语
+
+### 4. 📚 知识库（向量检索）
+
+知识源在 [knowledge/](knowledge/) 目录：
+
+| 文件 | 内容 | 切分方式 |
+|---|---|---|
+| `products.csv` | 商品 SKU（标题/价格/库存/变体/保修地区/描述） | 一行一个 SKU |
+| `policies.md` | 退换货、物流时效、关税、支付、保修、追踪、联系方式、投诉 | 每个 `##` 章节 |
+| `faq.json` | 中英双语问答对 | 一问一答 |
+
+处理链路：切分 → `BAAI/bge-m3` 向量化（1024 维）→ 存入数据库（SQLite / Postgres）→ 按余弦相似度召回 Top3 注入系统提示；向量索引不可用时自动回退关键词检索。
+
+```powershell
+# 修改 knowledge/ 后重建索引（本地）
+.\.venv\Scripts\python.exe scripts\ingest_kb.py --force
+# 或在后台「概览 → 重建索引」点一下
+```
+
+后台新增的知识条目也存在数据库里（`source=admin`），重建索引不会覆盖。
+
+### 5. 🔀 多智能体路由
+```
+classify_query ──┬─ 物流关键词 ───────────────► logistics_agent
+                 ├─ product_info ─────────────► product_agent
+                 ├─ technical_support ────────► tech_agent
+                 ├─ billing ──────────────────► billing_agent
+                 ├─ complaint ────────────────► complaint_agent
+                 ├─ general_inquiry ──────────► general_agent
+                 └─ out_of_scope ─────────────► 固定护栏话术（双语）
+                                            ↓
+                                     final_response
+```
+
+---
+
+## 🗂 目录结构
 
 ```
 customer-service-ai-agent/
-├── multi_agents/ # 智能体模块
-│ ├── __init__.py # 智能体包初始化
-│ ├── base_agent.py # 基础智能体类
-│ ├── product_agent.py # 产品专家智能体
-│ ├── tech_agent.py # 技术支持专家智能体
-│ ├── billing_agent.py # 账单专家智能体
-│ ├── complaint_agent.py # 投诉处理专家智能体
-│ └── general_agent.py # 综合客服智能体
-├── tools/ # 工具函数模块
-│ ├── __init__.py # 工具包初始化
-│ └── query_tools.py # 查询分类工具
-├── templates/ # Web界面模板
-│ └── index.html # 主页面HTML模板
-├── config.py # 基础配置文件
-├── multi_agent_customer_service.py # 主程序文件（LangGraph工作流）
-├── session_manager.py # 会话管理器（LangChain标准接口）
-├── web_app.py # Web 入口（Flask 路由与 HTTP 会话）
-├── chat_web_service.py # LangGraph 调用、会话状态解析等业务逻辑
-├── langgraph.json # LangGraph工作流配置
-├── requirements.txt # 项目依赖
-├── .env # 环境变量配置
-├── README.md # 项目说明文档
-└── README_LangGraph_CLI.md # LangGraph CLI使用说明
+├── web_app.py                     # Flask 入口：页面 + /api/chat + 后台注册
+├── start.sh                       # 生产启动脚本（gunicorn，读取 PORT / WEB_CONCURRENCY）
+├── chat_service_embedded.py       # ⭐ 单进程模式：图内嵌执行、会话读写
+├── chat_web_service.py            # 双服务模式：HTTP 调 LangGraph（需许可证）
+├── graph_runtime.py               # ⭐ 图实例 + 持久化 checkpointer + 并发锁
+├── multi_agent_customer_service.py# LangGraph 图：分类、路由、智能体节点
+├── persona.py                     # ⭐ 跨境电商人设（系统提示）
+├── i18n.py                        # ⭐ 语言识别 + 回复语言指令
+├── knowledge/                     # ⭐ 知识源（csv / md / json）
+│   ├── products.csv
+│   ├── policies.md
+│   └── faq.json
+├── knowledge_loader.py            # 切分知识源为 chunk
+├── knowledge_base.py              # 关键词兜底检索
+├── vector_store.py                # ⭐ 向量化、入库、余弦检索
+├── embedding_client.py            # bge-m3 调用
+├── db.py                          # SQLite / Postgres 双引擎 + 所有表
+├── admin/                         # ⭐ 后台蓝图（登录/会话/知识库/运单）
+├── scripts/
+│   ├── ingest_kb.py               # 知识库入库 / 重建索引
+│   └── clear_sessions.py          # 清空会话（演示用）
+├── multi_agents/                  # 6 个智能体
+├── tools/                         # 意图分类 + 物流模拟
+├── templates/                     # index.html / admin.html / admin_login.html
+├── deploy/Dockerfile.web          # Web 镜像
+├── docker-compose.yml             # 本地：db + web（ingest 可选）
+├── render.yaml                    # Render 部署蓝图
+├── requirements.txt
+└── .env.example                   # 环境变量模板（复制为 .env）
 ```
 
-## 主要特性
+---
 
-### 1. 模块化智能体设计
-- 每个智能体独立实现，职责单一
-- 基于抽象基类，便于扩展和维护
-- 支持动态LLM注入
+## 🚀 快速开始
 
-### 2. 配置驱动的工作流
-- 工作流定义在`langgraph.json`中
-- 支持条件路由和直接连接
-- 无需硬编码流程逻辑
+### 1. 环境要求
+- Python 3.11+（本项目在 3.12.4 验证）
+- 一个 OpenAI 兼容的 API Key（默认使用[硅基流动](https://cloud.siliconflow.cn/account/ak)）
 
-### 3. 专业的业务领域
-- **产品专家**: 产品信息咨询和推荐
-- **技术支持专家**: 技术问题诊断和解决
-- **账单专家**: 财务和账单问题处理
-- **投诉处理专家**: 客户投诉和建议处理
-- **综合客服**: 一般咨询处理
+### 2. 安装依赖
 
-### 4. 智能对话上下文管理
-- **会话管理**: 支持多会话并发，每个会话独立管理
-- **历史对话缓存**: 完整的对话历史记录，包含时间戳和角色标识
-- **上下文感知**: 智能体基于历史对话生成连贯、个性化的回答
-- **记忆功能**: 集成LangChain记忆组件，支持长期对话记忆
-- **多轮对话**: 同一会话内支持连续对话，避免重复信息
-
-## 安装和配置
-
-### 1. 安装依赖
 ```bash
+cd customer-service-ai-agent
+python -m venv .venv
+.venv\Scripts\activate            # Windows
+# source .venv/bin/activate       # macOS / Linux
+
 pip install -r requirements.txt
-pip install langgraph-cli
 pip install -U "langgraph-cli[inmem]"
-```
-在win环境中，langgraph-cli下载后，需要将`langgraph.exe`路径加入PATH环境变量。或者使用时直接带全路径，例`<your site-packages>\bin\langgraph.exe`
-
-### 2. 环境变量配置
-复制 `env_example.txt` 为 `.env` 文件并配置。
-
-### 3. 图结构自检
-```bash
-python multi_agent_customer_service.py
+pip install colorama              # Windows 下 langgraph dev 彩日志必需
 ```
 
-## 🚀 运行说明
+### 3. 配置 `.env`
 
-### 方式1：使用Studio UI访问langgraph服务
-```
-langgraph dev
-```
-启动后，会自动拉起LangSmith服务，包含LangStudio UI，默认2024端口。使用浏览器访问`https://smith.langchain.com/studio/thread?render=interact&baseUrl=http://127.0.0.1:2024`
+复制 `.env.example` 为 `.env`，最少只需要改一项：
 
-### 方式2：使用Web服务调用langgraph api
-```
-## 终端1：启动LangGraph服务
-langgraph dev
-
-## 终端2：启动自定义Web服务
-python ./web_app.py
-```
-使用浏览器访问`http://localhost:5000`，界面功能：
-- 实时聊天: 输入问题，获得智能回复
-- 智能体信息: 显示当前处理问题的专家和查询类型
-- 历史管理: 查看、清除对话历史
-- 数据导出: 导出对话记录用于分析
-
-### 方式3：直接API调用
-接口文档访问地址默认`http://127.0.0.1:2024/docs`，内嵌了js需要挂梯子。也可参考`https://langchain-ai.github.io/langgraph/cloud/reference/api/api_ref.html`
-
-需要`langgraph dev`启动LangGraph服务。
-
-## 工作流程
-
-1. **会话创建**: 为每个客户创建唯一会话ID
-2. **查询分类**: 系统自动分析客户查询类型
-3. **上下文加载**: 加载历史对话上下文
-4. **智能体路由**: 根据查询类型路由到相应的专业智能体
-5. **专业处理**: 专业智能体基于上下文处理客户查询
-6. **响应生成**: 生成最终响应并更新会话历史
-7. **状态保存**: 保存对话状态和记忆信息
-
-### 工作流程图
-```
-客户查询 → 会话管理 → 查询分类 → 上下文加载 → 智能体路由 → 专业处理 → 最终响应
-    ↓         ↓         ↓         ↓          ↓          ↓         ↓
-  输入    会话创建   类型识别   历史加载    专家选择    专业解答    格式化输出
-                ↓
-            状态保存
+```env
+OPENAI_API_KEY=sk-your-key-here
+OPENAI_BASE_URL=https://api.siliconflow.cn/v1
+OPENAI_MODEL=Qwen/Qwen3-8B
+HTTP_TIMEOUT=180
+LANGGRAPH_API_URL=http://127.0.0.1:2024
+LANGGRAPH_GRAPH_NAME=customer_service
+FLASK_SECRET_KEY=随便一串随机字符
 ```
 
-### 状态管理
-系统使用 `AgentState` 来管理整个工作流的状态：
-- `customer_query`: 客户查询内容
-- `query_type`: 查询类型分类
-- `current_agent`: 当前处理智能体
-- `response`: 智能体回复
-- `tools_used`: 使用的工具列表
-- `session_id`: 会话唯一标识
-- `conversation_history`: 对话历史记录
-- `memory`: LangChain记忆组件
+> `HTTP_TIMEOUT` 建议 ≥120 秒：Qwen3 等思考型模型在长提示下容易超过 30 秒。
 
-## 关于硅基流动API
-系统中llm大模型使用的是硅基流动模型服务商，也可选其他，都是使用统一的openAI接口规范。
+### 4. 启动
 
-### 优势特点
-- **国内服务**: 访问速度快，延迟低
-- **价格实惠**: 相比其他API服务更经济
-- **模型丰富**: 支持多种开源模型
-- **API兼容**: 完全兼容OpenAI API格式
-- **配置简单**: 只需设置API密钥和模型名称
+**方式 A：单进程（推荐，无需 Docker）**
 
-### 推荐模型
-- `qwen2.5-7b-instruct` - 性价比高，适合一般应用
-- `qwen2.5-14b-instruct` - 性能更好，适合复杂任务
-- `llama3.1-8b-instruct` - 通用性强，稳定性好
-- `mistral-7b-instruct` - 推理能力强
+`APP_MODE=embedded` 时，图直接跑在 Flask 进程里，会话历史写入 SQLite（`data/app.db`），重启不丢：
 
-## 扩展指南
+```powershell
+.\.venv\Scripts\python.exe web_app.py
+# http://localhost:5000
+```
 
-### 添加新的智能体
+**方式 B：Docker（Postgres 持久化，更接近线上）**
 
-1. 在 `multi_agents/` 目录下创建新的智能体文件
-2. 继承`BaseAgent`类并实现`process`方法
-3. 在`multi_agents/__init__.py`中导入新智能体
-4. 在`langgraph.json`中添加节点和边配置
+见下一节。
 
-### 添加新的工具函数
+> 如果你的 key 额度有限，注意每条消息会触发 2 次模型调用（分类 + 回答）。
 
-1. 在`tools/`目录下创建新的工具文件
-2. 使用`@tool`装饰器定义工具
-3. 在`tools/__init__.py`中导入新工具
+### 5. 自检
 
-### 修改工作流程
+```powershell
+# 页面 / 健康检查
+curl http://127.0.0.1:5000/api/health
+# 数据库 + 图自检
+curl http://127.0.0.1:5000/api/test
+# 后台（密码为 .env 的 ADMIN_PASSWORD）
+# http://localhost:5000/admin
+```
 
-1. 编辑`langgraph.json`文件
-2. 修改节点、边和路由配置
-3. 重启系统应用新配置
+---
 
-## 技术架构
+## 🐳 本地 Docker 运行（Postgres + Web）
 
-- **LangGraph**: 工作流编排框架
-- **LangChain Core**: LLM集成和消息处理
-- **硅基流动API**: 大语言模型服务
-- **模块化设计**: 高内聚、低耦合的架构
+默认两容器：`db`（Postgres 16）+ `web`（Flask + gunicorn，`APP_MODE=embedded`）。
+会话 checkpoint、知识库原文与向量都存在 Postgres，`docker compose down` 不会丢数据（`down -v` 才会）。
 
-## 相关文档
-- [README_LangGraph_CLI.md](README_LangGraph_CLI.md) - LangGraph CLI使用指南
-- [langgraph.json](langgraph.json) - 工作流配置文件
-- [LangGraph API服务搭建](https://docs.langchain.com/langgraph-platform/cli#configuration-file)
-- [LangGraph MCP适配器](https://github.com/langchain-ai/langchain-mcp-adapters)
+```powershell
+# 1. 启动（首次会构建 web 镜像）
+docker compose up -d --build
+
+# 2. 首次把知识库写入 Postgres（之后改 knowledge/ 再跑一次）
+docker compose run --rm web python scripts/ingest_kb.py --force
+
+# 3. 打开页面
+# http://localhost:5000
+```
+
+> 启动前先停掉本机直接运行的 `python web_app.py`，否则 5000 端口冲突。
+
+**关于「双服务」**：LangGraph 官方 Agent Server 接 Postgres 属于授权模式，需要 LangGraph Cloud 许可证，免费版只提供内存态 `langgraph dev`。因此本项目默认用 embedded + 开源 checkpointer；仓库里保留了 `agent-server` profile，拿到许可证后可用：
+
+```powershell
+docker compose --profile agent-server up -d
+```
+
+**国内网络拉不到 Docker Hub 时**，先用镜像源拉取再打回标准标签：
+
+```powershell
+docker pull docker.m.daocloud.io/library/postgres:16-alpine
+docker tag  docker.m.daocloud.io/library/postgres:16-alpine postgres:16-alpine
+docker pull docker.m.daocloud.io/library/python:3.12-slim
+docker tag  docker.m.daocloud.io/library/python:3.12-slim python:3.12-slim
+docker compose up -d --build
+```
+
+## 🛠 管理后台
+
+地址：<http://localhost:5000/admin>，密码为 `.env` 中的 `ADMIN_PASSWORD`（默认 `globalshop-admin-2026`，**上线前务必修改**）。
+
+| 标签页 | 能力 |
+|---|---|
+| 概览 | 会话数、知识片段数、已向量化数、运单数；一键重建索引 |
+| 会话 | 查看所有会话及完整对话记录 |
+| 知识库 | 新增/删除后台条目（保存即向量化）；查看文件来源统计（只读） |
+| 模拟运单 | 录入运单号 + 中英状态 + 位置 + 时效，前台查该单号即返回录入内容 |
+
+**两套知识来源**：
+- `knowledge/` 下的 CSV / Markdown / JSON：文件即事实源，页面只读，改完点「重建索引」
+- 后台新增的条目：存在数据库（`source=admin`），重建索引不会丢
+
+**模拟运单**：录入后，用户在聊天里发「我的包裹到哪了？单号 xxx」即可命中；未录入的单号仍返回默认的「已到达目的国海关，正在清关中」话术。
+
+## 💬 可以这样试
+
+| 输入 | 预期路由 | 说明 |
+|---|---|---|
+| `我的包裹到哪了？单号 YT123456789CN` | 物流追踪 | 直接返回清关话术，不走大模型 |
+| `Where is my parcel? YT123456789CN` | Logistics | 英文回复 |
+| `退换货政策是怎样的` / `What is your return policy?` | 综合客服 / 账单 | 命中知识库 `refund` 章节 |
+| `关税由谁承担？` | 账单与支付 | 命中 `customs` 章节 |
+| `耳机连不上手机` | 技术支持 | 结合保修政策排查 |
+| `写一首关于夏天的诗` | 护栏 | 双语礼貌拒答 |
+
+---
+
+## 🔧 扩展指南
+
+### 加知识
+- **临时/运营条目**：后台「知识库」页新增，保存即向量化
+- **长期内容**：改 `knowledge/products.csv`、`policies.md`、`faq.json`，然后执行 `python scripts/ingest_kb.py --force`（或后台点「重建索引」）
+
+FAQ 条目格式：
+
+```json
+{ "id": "faq-gift", "category": "products",
+  "question_en": "Do you offer gift wrapping?",
+  "question_zh": "支持礼品包装吗？",
+  "answer_en": "Free gift wrap for orders over USD 50.",
+  "answer_zh": "订单满 50 美元免费礼盒包装。" }
+```
+
+### 接入真实物流 API
+编辑 `tools/logistics.py` 的 `track_package()`，把模拟返回值换成承运商（4PX / YunExpress / DHL）的查询结果，保持返回字段（`tracking_number / stage / events / eta_*`）不变即可。
+
+### 新增智能体
+1. 在 `multi_agents/` 新建 `xxx_agent.py`，继承 `BaseAgent`，实现 `process()`
+2. 在 `multi_agents/__init__.py` 导出
+3. 在 `multi_agent_customer_service.py` 的 `make_graph()` 里 `add_node` + 条件边
+4. 在 `tools/query_tools.py` 的分类标签里加入新类别
+
+### 换模型 / 换服务商
+改 `.env` 的 `OPENAI_BASE_URL` 和 `OPENAI_MODEL` 即可，任何 OpenAI 兼容接口都能用。
+
+---
+
+## 🚀 部署到公网（Render + Neon）
+
+目标架构：**一个 Docker 容器（embedded 模式）+ Neon Postgres**，Render 免费方案即可跑起来。
+
+> 双服务（独立 Agent Server + Postgres）属于 LangGraph 商业授权功能，需要 Cloud 许可证，本项目默认不用。
+
+### 1. 前置检查（重要）
+
+- **重置 Neon 密码**：如果连接串曾出现在聊天记录/截图里，请到 Neon 控制台 Reset password。
+- **换强密码**：`ADMIN_PASSWORD` 不要用默认值。
+- **确认无密钥入库**：`.env`、`data/` 已在 `.gitignore` 中；推送前执行 `git status` 确认。
+
+### 2. 推送代码到 GitHub
+
+仓库当前仍指向原项目 `origin`，换成你自己的：
+
+```powershell
+git remote remove origin
+git remote add origin git@github.com:<你的账号>/globalshop-ai.git
+git add .
+git commit -m "feat: cross-border CS agent with RAG, admin, DeepSeek-style UI"
+git push -u origin main
+```
+
+### 3. Render 一键部署
+
+1. Render → **New → Blueprint** → 选择该仓库（自动读取 [render.yaml](render.yaml)）
+2. 按提示填写三个变量：
+   - `DATABASE_URL`：Neon 连接串（`postgresql://...?sslmode=require`）
+   - `OPENAI_API_KEY`：硅基流动 Key
+   - `ADMIN_PASSWORD`：后台密码
+3. 等待构建（首次约 3–6 分钟），健康检查路径 `/api/health`
+
+### 4. 首次初始化
+
+- 如果 Neon 里还没有知识库：打开 `https://<你的域名>/admin` → 「概览」→「重建索引」
+- 如果已有（本项目已灌过 17 条）：直接访问首页即可
+
+### 5. 验收
+
+- 手机 4G 打开 `https://<你的域名>`，发一条物流问题
+- `/admin` 登录，新增一条知识 → 重建索引 → 前台提问验证
+- 重启实例（Render Manual Deploy → Restart）后确认历史仍在
+
+### 6. 注意事项
+
+| 项 | 说明 |
+|---|---|
+| 免费实例休眠 | 15 分钟无请求会休眠，下次访问冷启动约 30–60 秒 |
+| 内存 | 免费 512MB，`WEB_CONCURRENCY=2` 足够；调大可能 OOM |
+| 区域 | Render 选 `singapore`；Neon 建议同区域（如新建 ap-southeast-1）可显著降低延迟 |
+| 连接串 | Neon 用 **pooler** 主机名；Render 出站是 IPv4，若报 `ENETUNREACH` 说明拿到了 IPv6 地址，换 pooler 或新建项目 |
+| 密钥 | 全部通过 Render 环境变量注入，不要写进镜像 |
+
+## 🩺 常见问题
+
+**Q：`langgraph dev` 启动即崩，报 `colorama`？**
+装 `pip install colorama`（Windows 彩色日志依赖）。
+
+**Q：报 `IndexError` / `MongoDBChatMessageHistory` 导入失败？**
+`langchain-community` 0.4.x 移除了该后端，本项目的 `session_manager.py` 已做容错导入；默认内存后端不受影响。
+
+**Q：对话报 429？**
+模型服务商限流。每条用户消息会触发 2 次模型调用（分类 + 回答），免费额度较低时连续提问容易触发；代码已对 429 做 20s/40s 退避，仍失败请稍等 1–2 分钟或充值。
+
+**Q：改了 Prompt / 智能体代码不生效？**
+Docker 部署时执行 `docker compose restart web`；本地 direct run 则重启 `web_app.py`。
+
+**Q：`docker compose up` 后 web 起不来？**
+看 `docker compose logs web`。数据库未就绪时先 `docker compose ps` 确认 db healthy；第一次可等 10–20 秒再访问。
+
+**Q：部署后报 `ENETUNREACH` / 连不上 Neon？**
+Render 出站只有 IPv4，而 Neon 某些端点只解析 IPv6。改用 Neon 的 **pooler** 连接串，或在 Neon 控制台确认项目有 IPv4 地址。
+
+---
+
+## 📄 许可证
+
+本项目沿用原项目的 [Apache-2.0](LICENSE) 许可证。二次开发部分同样以 Apache-2.0 发布。

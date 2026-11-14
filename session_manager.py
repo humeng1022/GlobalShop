@@ -14,12 +14,23 @@ from langchain_core.chat_history import BaseChatMessageHistory, InMemoryChatMess
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 # 存储后端导入
-from langchain_community.chat_message_histories import (
-    RedisChatMessageHistory,
-    MongoDBChatMessageHistory,
-    PostgresChatMessageHistory,
-    FileChatMessageHistory
-)
+# 说明：langchain-community 0.4.x 起 MongoDBChatMessageHistory 已被移除，
+# 且这些后端属于可选依赖。这里改为容错导入，避免默认的 memory 后端也被拖崩。
+try:
+    from langchain_community.chat_message_histories import (
+        RedisChatMessageHistory,
+        PostgresChatMessageHistory,
+        FileChatMessageHistory,
+    )
+except ImportError:  # pragma: no cover
+    RedisChatMessageHistory = None
+    PostgresChatMessageHistory = None
+    FileChatMessageHistory = None
+
+try:
+    from langchain_community.chat_message_histories import MongoDBChatMessageHistory
+except ImportError:  # pragma: no cover
+    MongoDBChatMessageHistory = None
 
 class LangChainSessionManager:
     """
@@ -74,24 +85,35 @@ class LangChainSessionManager:
             return InMemoryChatMessageHistory()
 
         if self.storage_backend == "redis":
+            if RedisChatMessageHistory is None:
+                raise ImportError("当前环境未提供 RedisChatMessageHistory，请使用 memory 后端")
             return RedisChatMessageHistory(
                 session_id=session_id,
                 url=self.storage_config["url"],
             )
 
         if self.storage_backend == "mongodb":
+            if MongoDBChatMessageHistory is None:
+                raise ImportError(
+                    "当前 langchain-community 版本已移除 MongoDBChatMessageHistory，"
+                    "请改用 memory/file 后端，或安装兼容的 langchain-community<0.4"
+                )
             return MongoDBChatMessageHistory(
                 session_id=session_id,
                 connection_string=self.storage_config["connection_string"],
             )
 
         if self.storage_backend == "postgres":
+            if PostgresChatMessageHistory is None:
+                raise ImportError("当前环境未提供 PostgresChatMessageHistory，请使用 memory 后端")
             return PostgresChatMessageHistory(
                 session_id=session_id,
                 connection_string=self.storage_config["connection_string"],
             )
 
         if self.storage_backend == "file":
+            if FileChatMessageHistory is None:
+                raise ImportError("当前环境未提供 FileChatMessageHistory，请使用 memory 后端")
             file_path = os.path.join(
                 self.storage_config["storage_dir"],
                 f"{session_id}.json",

@@ -8,6 +8,7 @@ from .tech_agent import TechAgent
 from .billing_agent import BillingAgent
 from .complaint_agent import ComplaintAgent
 from .general_agent import GeneralAgent
+from .logistics_agent import LogisticsAgent
 
 __all__ = [
     "BaseAgent",
@@ -15,5 +16,6 @@ __all__ = [
     "TechAgent",
     "BillingAgent",
     "ComplaintAgent",
-    "GeneralAgent"
+    "GeneralAgent",
+    "LogisticsAgent",
 ]

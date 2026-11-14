@@ -1,0 +1,44 @@
+# GlobalShop 公网部署蓝图（Render）
+#
+# 用法：
+#   1. 把仓库推到 GitHub
+#   2. Render → New → Blueprint → 选择仓库（会自动读取本文件）
+#   3. 按提示填写 DATABASE_URL（Neon）、OPENAI_API_KEY、ADMIN_PASSWORD
+#   4. 部署完成后，首次打开 /admin →「概览」→「重建索引」
+#
+# 说明：Agent Server（双服务）需要 LangGraph Cloud 许可证，
+# 这里用单容器 embedded 模式 + Neon Postgres，免费额度即可运行。
+
+services:
+  - type: web
+    name: globalshop-ai
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: ./deploy/Dockerfile.web
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: APP_MODE
+        value: embedded
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL
+        value: https://api.siliconflow.cn/v1
+      - key: OPENAI_MODEL
+        value: Qwen/Qwen3-8B
+      - key: EMBEDDING_MODEL
+        value: BAAI/bge-m3
+      - key: HTTP_TIMEOUT
+        value: "180"
+      - key: HTTP_MAX_RETRIES
+        value: "3"
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: WEB_CONCURRENCY
+        value: "2"

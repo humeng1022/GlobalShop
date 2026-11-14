@@ -37,6 +37,19 @@ def get_current_thread_id() -> Optional[str]:
     return _current_thread_id
 
 
+def get_last_reasoning() -> str:
+    """server 模式暂不支持思考过程透传。"""
+    return ""
+
+
+def get_last_elapsed() -> float:
+    return 0.0
+
+
+def get_last_agent() -> str:
+    return ""
+
+
 # -----------------------------------------------------------------------------
 # 线程 state → 对话列表 / 侧栏预览
 # -----------------------------------------------------------------------------
@@ -413,7 +426,8 @@ def clear_thread_and_create_new(thread_id: str) -> Tuple[Optional[str], Optional
 # 一次聊天运行（阻塞轮询）
 # -----------------------------------------------------------------------------
 
-def run_chat_sync(user_message: str, client_session_id: Optional[str] = None) -> Tuple[Optional[str], Optional[str], Optional[int]]:
+def run_chat_sync(user_message: str, client_session_id: Optional[str] = None,
+                  use_kb: bool = True) -> Tuple[Optional[str], Optional[str], Optional[int]]:
     """
     在当前线程上提交一轮用户消息并等待完成。
     client_session_id: 前端传入的会话 ID（可为 LangGraph 线程 ID）。

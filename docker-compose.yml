@@ -1,0 +1,73 @@
+# GlobalShop 本地服务栈
+#
+# 默认（推荐，无需许可证）：db + web，Flask 进程内跑图（embedded），
+#   checkpointer 用 Postgres，重启不丢历史。
+#      docker compose up -d --build
+#      docker compose run --rm web python scripts/ingest_kb.py --force
+#
+# 可选（需要 LangGraph Cloud 许可证）：加 agent-server profile 起独立 Agent 服务。
+#      docker compose --profile agent-server up -d
+
+name: globalshop
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: globalshop
+      POSTGRES_PASSWORD: globalshop_local_only
+      POSTGRES_DB: globalshop
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U globalshop -d globalshop"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+    env_file:
+      - .env
+    environment:
+      APP_MODE: embedded
+      DATABASE_URL: postgresql://globalshop:globalshop_local_only@db:5432/globalshop
+      PORT: "5000"
+      WEB_CONCURRENCY: "5"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+
+  # ---- 以下为可选的双服务形态（需要许可证）----
+  redis:
+    image: redis:7-alpine
+    profiles: ["agent-server"]
+    command: ["redis-server", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  agent:
+    image: globalshop-agent:latest
+    profiles: ["agent-server"]
+    env_file:
+      - .env
+    environment:
+      POSTGRES_URI: postgres://globalshop:globalshop_local_only@db:5432/globalshop
+      REDIS_URI: redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "2024:2024"
+
+volumes:
+  pgdata:

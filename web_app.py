@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-多智能体客服系统 - Web 入口
+GlobalShop AI 客服中心 - Web 入口（跨境电商智能客服）
 基于 LangGraph API 接口，路由与 Flask 会话；业务逻辑见 chat_web_service.py
 """
 
@@ -14,21 +14,67 @@ load_dotenv()
 
 from flask import Flask, render_template, request, jsonify, session, Response
 
-from chat_web_service import (
-    run_chat_sync,
-    stream_chat_events,
-    fetch_sessions_list,
-    fetch_session_detail,
-    delete_remote_thread,
-    clear_thread_and_create_new,
-    langgraph_connectivity_test,
-    get_current_thread_id,
-)
-
-# 导入配置（与历史行为保持一致）
+# 导入配置（需先于会话服务导入，用来决定 APP_MODE）
 from config import *  # noqa: E402,F401,F403
 
+if APP_MODE == "embedded":
+    # 单进程模式：图直接跑在 Flask 里，checkpointer 持久化（本地默认）
+    from chat_service_embedded import (
+        run_chat_sync,
+        stream_chat_events,
+        fetch_sessions_list,
+        fetch_session_detail,
+        delete_remote_thread,
+        clear_thread_and_create_new,
+        langgraph_connectivity_test,
+        get_current_thread_id,
+        get_last_reasoning,
+        get_last_elapsed,
+        get_last_agent,
+    )
+else:
+    # 双服务模式：通过 HTTP 调用独立 LangGraph 服务
+    from chat_web_service import (
+        run_chat_sync,
+        stream_chat_events,
+        fetch_sessions_list,
+        fetch_session_detail,
+        delete_remote_thread,
+        clear_thread_and_create_new,
+        langgraph_connectivity_test,
+        get_current_thread_id,
+        get_last_reasoning,
+        get_last_elapsed,
+        get_last_agent,
+    )
+
 app = Flask(__name__)
+
+# 后台管理（/admin）
+from admin import admin_bp  # noqa: E402
+
+app.register_blueprint(admin_bp)
+
+
+# 启动预热：提前建立 checkpointer 连接并建表，避免第一个用户等 Neon 冷启动
+def _warmup_graph():
+    try:
+        if APP_MODE != "embedded":
+            return
+        import time
+        import graph_runtime
+
+        started = time.time()
+        graph_runtime.get_graph()
+        print(f"✅ 图预热完成，用时 {time.time() - started:.1f}s")
+    except Exception as e:
+        print(f"⚠️ 图预热失败（不影响 /api/health）: {e}")
+
+
+if APP_MODE == "embedded":
+    import threading
+
+    threading.Thread(target=_warmup_graph, daemon=True).start()
 
 # Flask 配置
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "your-secret-key-here")
@@ -67,8 +113,9 @@ def chat():
         data = request.get_json()
         user_message = (data.get('message') or '').strip()
         client_session_id = data.get('session_id', 'default')
+        use_kb = bool(data.get('use_kb', True))
 
-        ai_text, err_msg, http_code = run_chat_sync(user_message, client_session_id)
+        ai_text, err_msg, http_code = run_chat_sync(user_message, client_session_id, use_kb=use_kb)
         if err_msg:
             return jsonify({'error': err_msg}), http_code or 500
 
@@ -77,6 +124,9 @@ def chat():
             'response': ai_text,
             'session_id': tid,
             'thread_id': tid,
+            'reasoning': get_last_reasoning(),
+            'elapsed': get_last_elapsed(),
+            'agent': get_last_agent(),
         })
     except Exception as e:
         print(f"❌ 聊天处理错误: {e}")
@@ -119,6 +169,21 @@ def get_session(session_id):
     if err:
         return jsonify({'error': err}), 500
     return jsonify({'session': session_data})
+
+
+@app.route('/api/sessions/<session_id>', methods=['PATCH'])
+def rename_session(session_id):
+    """重命名会话（侧栏操作）。"""
+    try:
+        data = request.get_json(silent=True) or {}
+        title = (data.get('title') or '').strip()
+        if not title:
+            return jsonify({'error': '标题不能为空'}), 400
+        from db import rename_thread
+        rename_thread(session_id, title)
+        return jsonify({'message': '重命名成功', 'title': title})
+    except Exception as e:
+        return jsonify({'error': f'重命名失败: {e}'}), 500
 
 
 @app.route('/api/sessions/<session_id>', methods=['DELETE'])
@@ -192,13 +257,14 @@ def test_langgraph():
 
 def main():
     """主函数"""
-    print("🚀 多智能体客服系统 Web 应用")
+    print("🚀 GlobalShop AI 客服中心 Web 应用")
     print("=" * 60)
     print("🌐 启动 Web 服务...")
-    print("📱 访问地址: http://localhost:5000")
+    print(f"📱 访问地址: http://localhost:{PORT}")
     print("💡 按 Ctrl+C 停止服务")
     print()
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # debug 交给 gunicorn / 环境变量控制，避免生产环境暴露调试器
+    app.run(host='0.0.0.0', port=PORT, debug=FLASK_DEBUG)
 
 
 if __name__ == "__main__":

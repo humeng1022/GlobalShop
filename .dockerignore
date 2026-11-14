@@ -1,0 +1,12 @@
+.venv
+.git
+.gitignore
+__pycache__
+*.pyc
+.langgraph_api
+data
+deploy
+doc
+README.md
+.env
+.env.*

@@ -28,18 +28,30 @@ from config import *
 # 导入智能体和工具
 from multi_agents import (
     ProductAgent, TechAgent, BillingAgent,
-    ComplaintAgent, GeneralAgent
+    ComplaintAgent, GeneralAgent, LogisticsAgent
 )
 from tools import classify_query
+from tools.logistics import is_logistics_query
+from i18n import detect_language
 
 # 导入会话管理器
 from session_manager import LangChainSessionManager, default_session_manager
 
 # 超出客服范围时的固定回复（护栏：不调用业务智能体）
-OUT_OF_SCOPE_REPLY = (
-    "抱歉，这里是智能客服，仅处理与产品、技术、账单、投诉及相关售后政策类问题；"
-    "请用一句话说明您的具体业务诉求，我很乐意协助。"
+OUT_OF_SCOPE_REPLY_ZH = (
+    "抱歉，我是 GlobalShop 的智能客服，仅处理商品、物流、退换货、支付与关税、"
+    "保修和投诉等相关问题；请用一句话说明您的具体诉求，我很乐意协助。"
 )
+OUT_OF_SCOPE_REPLY_EN = (
+    "Sorry — I'm GlobalShop's shopping assistant and can help with products, shipping, "
+    "returns & refunds, payments & duties, warranty and complaints. "
+    "Could you tell me in one sentence what you need help with?"
+)
+
+
+def out_of_scope_reply(lang: str = "en") -> str:
+    """按用户语言返回护栏话术。"""
+    return OUT_OF_SCOPE_REPLY_ZH if lang == "zh" else OUT_OF_SCOPE_REPLY_EN
 
 # 定义状态类型
 class AgentState(TypedDict):
@@ -55,6 +67,14 @@ class AgentState(TypedDict):
     memory: Optional[BaseChatMessageHistory]
     # 由图 checkpointer 持久化，跨 LangGraph 工作进程仍可续聊（内存 session_manager 无法做到）
     persisted_dialogue: List[Any]
+    # 本轮用户提问语言（zh / en），由 classify_query_node 写入
+    language: str
+    # 思考型模型的推理过程（「深度思考」折叠展示）
+    reasoning: str
+    # 是否注入知识库检索结果（前端「智能搜索」开关）
+    use_kb: bool
+    # 最终处理该问题的智能体名（前端署名）
+    agent_name: str
 
 # OpenAI兼容API客户端类
 class OpenAICompatibleClient:
@@ -132,7 +152,8 @@ class OpenAICompatibleClient:
                 if "choices" in result and len(result["choices"]) > 0:
                     message = result["choices"][0].get("message", {})
                     content = message.get("content", "")
-                    return CustomResponse(content)
+                    reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+                    return CustomResponse(content, reasoning)
                 else:
                     return CustomResponse("API response format error")
 
@@ -140,7 +161,16 @@ class OpenAICompatibleClient:
                 print(f"❌ Debug: Attempt {attempt + 1} failed: {e}")
                 if attempt == self.max_retries - 1:
                     raise Exception(f"API call failed: {e}")
-                time.sleep(2 ** attempt)  # 指数退避
+                # 429 限流 / 5xx 服务端错误需要更长的冷却时间，
+                # 固定 1s、2s 的重试在免费额度下几乎必然连续失败。
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status == 429:
+                    wait = 20 * (attempt + 1)   # 20s, 40s
+                elif status is not None and status >= 500:
+                    wait = 5 * (attempt + 1)
+                else:
+                    wait = 2 ** attempt
+                time.sleep(wait)  # 指数退避
 
     def chat(self, messages):
         """兼容LangChain的chat方法"""
@@ -161,8 +191,10 @@ class OpenAICompatibleClient:
         return self
 
 class CustomResponse:
-    def __init__(self, content):
+    def __init__(self, content, reasoning=""):
         self.content = content
+        # Qwen3 等思考型模型返回的推理过程，用于前端「深度思考」折叠区
+        self.reasoning = reasoning
 
 # 全局会话管理器（使用 LangChain 标准接口）
 session_manager = default_session_manager
@@ -206,7 +238,8 @@ def initialize_agents():
         "tech_agent": TechAgent(),
         "billing_agent": BillingAgent(),
         "complaint_agent": ComplaintAgent(),
-        "general_agent": GeneralAgent()
+        "general_agent": GeneralAgent(),
+        "logistics_agent": LogisticsAgent(),
     }
 
     # 为每个智能体设置LLM和会话管理器
@@ -259,20 +292,36 @@ def classify_query_node(state: AgentState) -> AgentState:
         state["query_type"] = "general_inquiry"
         return state
 
-    # 使用分类工具
-    try:
-        llm_instance = get_llm()
-        # 使用正确的工具调用方式
+    # 语言识别：后续智能体据此决定中/英文回复
+    state["language"] = detect_language(customer_query)
+
+    # 账单/支付类关键词直接命中，避免被分类器误判到产品专家
+    BILLING_HINTS = (
+        "支付", "付款", "信用卡", "退款", "发票", "关税", "增值税", "汇率",
+        "paypal", "payment", "refund", "invoice", "customs", "duty", "duties", "vat",
+    )
+
+    # 物流类问题先用规则命中，省一次模型调用，也保证追踪话术稳定
+    if is_logistics_query(customer_query):
+        query_type = "logistics"
+        print("📦 规则命中：物流追踪")
+    elif any(hint in customer_query.lower() for hint in BILLING_HINTS):
+        query_type = "billing"
+        print("💳 规则命中：账单/支付")
+    else:
         try:
-            result = classify_query.invoke({"query": customer_query, "llm": llm_instance})
-            query_type = result
+            llm_instance = get_llm()
+            # 使用正确的工具调用方式
+            try:
+                result = classify_query.invoke({"query": customer_query, "llm": llm_instance})
+                query_type = result
+            except Exception as e:
+                print(f"Error in tool invocation: {e}")
+                # 回退到基础分类逻辑
+                query_type = "general_inquiry"
         except Exception as e:
-            print(f"Error in tool invocation: {e}")
-            # 回退到基础分类逻辑
+            print(f"Error in query classification: {e}")
             query_type = "general_inquiry"
-    except Exception as e:
-        print(f"Error in query classification: {e}")
-        query_type = "general_inquiry"
 
     # 更新状态
     state["query_type"] = query_type
@@ -295,17 +344,18 @@ def classify_query_node(state: AgentState) -> AgentState:
 
     # 护栏：超出范围直接固定回复，不进入业务智能体
     if state["query_type"] == "out_of_scope":
-        state["response"] = OUT_OF_SCOPE_REPLY
-        state["current_agent"] = "智能客服"
+        refusal = out_of_scope_reply(state.get("language", "en"))
+        state["response"] = refusal
+        state["current_agent"] = "GlobalShop Assistant"
         pd_oos = list(state.get("persisted_dialogue") or [])
         pd_oos.append({
-            "content": OUT_OF_SCOPE_REPLY,
+            "content": refusal,
             "is_user": False,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
         state["persisted_dialogue"] = pd_oos
         try:
-            session_manager.add_message(session_id, OUT_OF_SCOPE_REPLY, is_user=False)
+            session_manager.add_message(session_id, refusal, is_user=False)
         except Exception as e:
             print(f"Error adding out_of_scope refusal to session: {e}")
         state["tools_used"].append("out_of_scope_refusal")
@@ -358,11 +408,8 @@ def create_agent_node(agent_name: str):
 
 # 定义最终响应节点
 def final_response_node(state: AgentState) -> AgentState:
-    """Generate final response"""
-    current_agent = state["current_agent"]
-    response = state["response"]
-
-    state["response"] = f"【{current_agent}'s Response】\n{response}"
+    """Generate final response（智能体名单独返回，前端用小字署名）"""
+    state["agent_name"] = state.get("current_agent", "")
     return state
 
 # 图表入口点
@@ -371,8 +418,8 @@ def final_response_node(state: AgentState) -> AgentState:
 #     "customer_service": "./multi_agent_customer_service.py:make_graph"
 # },
 # 也可以在langgraph.json文件中使用workflow配置化的方式定义图的结构，但功能相对简单，无法实现复杂的逻辑
-def make_graph():
-    """构建LangGraph工作流图"""
+def make_graph(checkpointer=None):
+    """构建LangGraph工作流图（embedded 模式可传入持久化 checkpointer）"""
     # 创建工作流图
     workflow = StateGraph(AgentState)
 
@@ -383,6 +430,7 @@ def make_graph():
     workflow.add_node("billing_agent", create_agent_node("billing_agent"))
     workflow.add_node("complaint_agent", create_agent_node("complaint_agent"))
     workflow.add_node("general_agent", create_agent_node("general_agent"))
+    workflow.add_node("logistics_agent", create_agent_node("logistics_agent"))
     workflow.add_node("final_response", final_response_node)
 
     # 设置入口点
@@ -397,6 +445,7 @@ def make_graph():
             "technical_support": "tech_agent",
             "billing": "billing_agent",
             "complaint": "complaint_agent",
+            "logistics": "logistics_agent",
             "general_inquiry": "general_agent",
             "out_of_scope": "final_response",
         }
@@ -407,13 +456,14 @@ def make_graph():
     workflow.add_edge("tech_agent", "final_response")
     workflow.add_edge("billing_agent", "final_response")
     workflow.add_edge("complaint_agent", "final_response")
+    workflow.add_edge("logistics_agent", "final_response")
     workflow.add_edge("general_agent", "final_response")
 
     # 设置结束点
     workflow.set_finish_point("final_response")
 
-    # 编译工作流
-    app = workflow.compile()
+    # 编译工作流（embedded 模式会带 SqliteSaver / PostgresSaver）
+    app = workflow.compile(checkpointer=checkpointer)
 
     print("✅ LangGraph工作流图构建完成")
     return app

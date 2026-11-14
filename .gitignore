@@ -124,6 +124,11 @@ celerybeat.pid
 .venv
 env/
 venv/
+
+# ===== 本地运行时数据（不要提交）=====
+data/*.db
+data/*.db-*
+.langgraph_api/
 ENV/
 env.bak/
 venv.bak/

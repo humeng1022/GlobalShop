@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "globalshop-agent"
+version = "0.1.0"
+description = "GlobalShop cross-border e-commerce customer service agent"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools]
+py-modules = [
+    "config",
+    "i18n",
+    "persona",
+    "knowledge_loader",
+    "knowledge_base",
+    "db",
+    "embedding_client",
+    "vector_store",
+    "session_manager",
+    "chat_web_service",
+    "multi_agent_customer_service",
+    "web_app",
+]
+packages = ["multi_agents", "tools"]
