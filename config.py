@@ -13,6 +13,14 @@ from dotenv import load_dotenv
 # 加载环境变量
 load_dotenv()
 
+
+def _env_int(name: str, default: int) -> int:
+    """健壮的环境变量解析：空值/非法值回退默认，避免容器启动崩溃。"""
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
 # OpenAI兼容API配置（聊天模型）
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.siliconflow.cn/v1")
@@ -21,7 +29,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "Qwen/Qwen3-8B")
 # 向量模型（默认与聊天模型共用硅基流动 Key）
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", OPENAI_BASE_URL).rstrip("/")
-EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "16"))
+EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 16)
 
 # 运行形态：server = 调用独立 LangGraph 服务；embedded = 图内嵌在 Flask 进程
 APP_MODE = os.getenv("APP_MODE", "server").strip().lower()
@@ -30,13 +38,13 @@ APP_MODE = os.getenv("APP_MODE", "server").strip().lower()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/app.db")
 
 # 服务端口 / 管理后台
-PORT = int(os.getenv("PORT", "5000"))
+PORT = _env_int("PORT", 5000)
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 FLASK_DEBUG = os.getenv("FLASK_DEBUG", "False").lower() in ("1", "true", "yes")
 
 # HTTP请求配置
-HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT", "180"))
-HTTP_MAX_RETRIES = int(os.getenv("HTTP_MAX_RETRIES", "3"))
+HTTP_TIMEOUT = _env_int("HTTP_TIMEOUT", 180)
+HTTP_MAX_RETRIES = _env_int("HTTP_MAX_RETRIES", 3)
 HTTP_HEADERS = {
     "Content-Type": "application/json",
     "User-Agent": "GlobalShopCustomerService/1.0.0"

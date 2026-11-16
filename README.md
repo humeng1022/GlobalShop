@@ -1,3 +1,10 @@
+---
+title: GlobalShop AI 客服中心
+sdk: docker
+app_port: 7860
+license: Apache-2.0
+---
+
 # GlobalShop AI 客服中心
 
 > 面向跨境电商场景的多智能体智能客服 · 基于开源项目二次开发
@@ -101,9 +108,9 @@ customer-service-ai-agent/
 ├── multi_agents/                  # 6 个智能体
 ├── tools/                         # 意图分类 + 物流模拟
 ├── templates/                     # index.html / admin.html / admin_login.html
-├── deploy/Dockerfile.web          # Web 镜像
-├── docker-compose.yml             # 本地：db + web（ingest 可选）
-├── render.yaml                    # Render 部署蓝图
+├── Dockerfile                     # ⭐ 生产镜像（创空间/Compose 通用，根目录）
+├── start.sh                       # 生产启动脚本（PORT / WEB_CONCURRENCY）
+├── docker-compose.yml             # 本地：db + web
 ├── requirements.txt
 └── .env.example                   # 环境变量模板（复制为 .env）
 ```
@@ -269,59 +276,98 @@ FAQ 条目格式：
 
 ---
 
-## 🚀 部署到公网（Render + Neon）
+## 🚀 部署到公网（魔搭 ModelScope 创空间 + Neon）
 
-目标架构：**一个 Docker 容器（embedded 模式）+ Neon Postgres**，Render 免费方案即可跑起来。
+目标架构：**一个 Docker 创空间（embedded 模式）+ Neon Postgres**，国内直连、手机号注册、无需信用卡。
 
-> 双服务（独立 Agent Server + Postgres）属于 LangGraph 商业授权功能，需要 Cloud 许可证，本项目默认不用。
+> 创空间的磁盘是临时的（重启/重建会清空），所以数据库必须用 Neon，不能落 SQLite。
+> 双服务（独立 Agent Server + Postgres）属于 LangGraph 商业授权功能，本项目默认不用。
 
-### 1. 前置检查（重要）
+### 0. 为什么选 Docker 类型
 
-- **重置 Neon 密码**：如果连接串曾出现在聊天记录/截图里，请到 Neon 控制台 Reset password。
-- **换强密码**：`ADMIN_PASSWORD` 不要用默认值。
-- **确认无密钥入库**：`.env`、`data/` 已在 `.gitignore` 中；推送前执行 `git status` 确认。
+| 类型 | 是否适合 |
+|---|---|
+| Gradio | ❌ 会接管页面，我们的 Flask + 自定义前端用不上 |
+| Streamlit | ❌ 同上 |
+| **Docker / 自定义镜像** | ✅ 直接使用仓库根目录的 `Dockerfile`，监听 7860 |
 
-### 2. 推送代码到 GitHub
+### 1. 前置检查
 
-仓库当前仍指向原项目 `origin`，换成你自己的：
+- **重置 Neon 密码**（连接串曾出现在聊天/截图里）
+- `ADMIN_PASSWORD` 用强密码
+- 推送前 `git status` 确认 `.env`、`data/` 没被提交
+
+### 2. 注册并创建创空间（网页端，约 3 分钟）
+
+1. 打开 <https://www.modelscope.cn>，用手机号注册/登录
+2. 进入「创空间」→「创建创空间」
+3. 填写：
+
+   | 字段 | 值 |
+   |---|---|
+   | 创空间名称 | `GlobalShop`（会进 URL） |
+   | 许可证 | Apache-2.0 |
+   | **空间类型 / SDK** | **Docker**（自定义镜像），不要选 Gradio |
+   | 可见性 | 公开 |
+
+4. 创建完成后，页面会给一个 git 地址，形如：
+   `https://www.modelscope.cn/studios/<用户名>/GlobalShop.git`
+
+> 如果创建页没有 Docker 选项，先随便建一个空间，进「设置」里改 SDK 类型，或把页面截图发我。
+
+### 3. 推送代码（复用现有仓库）
+
+创空间本质是 git 仓库，加一个 remote 推上去：
 
 ```powershell
-git remote remove origin
-git remote add origin git@github.com:<你的账号>/globalshop-ai.git
-git add .
-git commit -m "feat: cross-border CS agent with RAG, admin, DeepSeek-style UI"
-git push -u origin main
+cd D:\DeepSeek\A4_AI_customer_service\customer-service-ai-agent
+
+# 用户名 + 访问令牌 作为密码
+git remote add ms https://www.modelscope.cn/studios/<用户名>/GlobalShop.git
+
+# 第一次覆盖创空间的初始 commit
+git push -f ms HEAD:main
 ```
 
-### 3. Render 一键部署
+如果提示 `src refspec main does not match`，改成 `git push -f ms HEAD:master`。
 
-1. Render → **New → Blueprint** → 选择该仓库（自动读取 [render.yaml](render.yaml)）
-2. 按提示填写三个变量：
-   - `DATABASE_URL`：Neon 连接串（`postgresql://...?sslmode=require`）
-   - `OPENAI_API_KEY`：硅基流动 Key
-   - `ADMIN_PASSWORD`：后台密码
-3. 等待构建（首次约 3–6 分钟），健康检查路径 `/api/health`
+令牌位置：个人中心 → **访问令牌**（没有就新建一个）。
 
-### 4. 首次初始化
+> 之后更新：`git add -A && git commit -m "..." && git push ms HEAD:main`
+> GitHub 仓库继续作为源码仓库，创空间只作为部署目标。
 
-- 如果 Neon 里还没有知识库：打开 `https://<你的域名>/admin` → 「概览」→「重建索引」
-- 如果已有（本项目已灌过 17 条）：直接访问首页即可
+### 4. 配置环境变量（关键）
 
-### 5. 验收
+创空间页面 → **设置** → **环境变量**（不同版本可能叫「变量 / 密钥」），逐个添加：
 
-- 手机 4G 打开 `https://<你的域名>`，发一条物流问题
-- `/admin` 登录，新增一条知识 → 重建索引 → 前台提问验证
-- 重启实例（Render Manual Deploy → Restart）后确认历史仍在
+| Name | Value | 说明 |
+|---|---|---|
+| `DATABASE_URL` | `postgresql://neondb_owner:...@....neon.tech/neondb?sslmode=require` | Neon 连接串（**不要**加 hostaddr） |
+| `OPENAI_API_KEY` | `sk-...` | 硅基流动 Key |
+| `ADMIN_PASSWORD` | 强密码 | 后台登录 |
+| `FLASK_SECRET_KEY` | 32 位随机十六进制 | 会话签名 |
+
+可选（不填走代码默认值）：`OPENAI_MODEL`、`EMBEDDING_MODEL`、`WEB_CONCURRENCY=2`。
+
+> 环境变量只在运行时注入，不会出现在代码里；保存后创空间会自动重启。
+
+### 5. 首次初始化与验收
+
+- 打开 `https://www.modelscope.cn/studios/<用户名>/GlobalShop`
+- 若 Neon 里没有知识库：`/admin` → 概览 → **重建索引**（本项目通常已灌好 17 条）
+- 后台密码 = `ADMIN_PASSWORD`
+- 手机 4G 打开验证；重启创空间后确认历史仍在
 
 ### 6. 注意事项
 
 | 项 | 说明 |
 |---|---|
-| 免费实例休眠 | 15 分钟无请求会休眠，下次访问冷启动约 30–60 秒 |
-| 内存 | 免费 512MB，`WEB_CONCURRENCY=2` 足够；调大可能 OOM |
-| 区域 | Render 选 `singapore`；Neon 建议同区域（如新建 ap-southeast-1）可显著降低延迟 |
-| 连接串 | Neon 用 **pooler** 主机名；Render 出站是 IPv4，若报 `ENETUNREACH` 说明拿到了 IPv6 地址，换 pooler 或新建项目 |
-| 密钥 | 全部通过 Render 环境变量注入，不要写进镜像 |
+| 端口 | 容器监听 `0.0.0.0:7860`（`start.sh` 默认）；若平台注入 `PORT` 会跟随 |
+| 502 / 无法访问 | 先看创空间「日志」：确认 gunicorn 实际监听端口，再把端口填到创空间设置里 |
+| 磁盘 | 临时存储，重启丢本地文件；会话/知识库/运单都在 Neon ✅ |
+| 休眠 | 免费空间长时间无访问会休眠，唤醒需几十秒 |
+| 延迟 | 创空间在国内、Neon 在 us-east-2，跨区约 200–300ms；想更快可在 Neon 新建新加坡项目 |
+| 安全 | 公开空间前台公开，后台有密码；Key 只放环境变量，绝不写进代码 |
 
 ## 🩺 常见问题
 
@@ -341,7 +387,7 @@ Docker 部署时执行 `docker compose restart web`；本地 direct run 则重�
 看 `docker compose logs web`。数据库未就绪时先 `docker compose ps` 确认 db healthy；第一次可等 10–20 秒再访问。
 
 **Q：部署后报 `ENETUNREACH` / 连不上 Neon？**
-Render 出站只有 IPv4，而 Neon 某些端点只解析 IPv6。改用 Neon 的 **pooler** 连接串，或在 Neon 控制台确认项目有 IPv4 地址。
+平台出站只有 IPv4，而 Neon 某些端点只解析 IPv6。改用 Neon 的 **pooler** 连接串，或在 Neon 控制台确认项目有 IPv4 地址。
 
 ---
 

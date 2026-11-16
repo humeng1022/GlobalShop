@@ -28,7 +28,10 @@ services:
   web:
     build:
       context: .
-      dockerfile: deploy/Dockerfile.web
+      dockerfile: Dockerfile
+      args:
+        # 国内本地构建走清华源；Hugging Face 构建时用 Dockerfile 默认的官方源
+        PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
     env_file:
       - .env
     environment:
