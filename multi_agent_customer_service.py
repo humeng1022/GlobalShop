@@ -296,18 +296,20 @@ def classify_query_node(state: AgentState) -> AgentState:
     state["language"] = detect_language(customer_query)
 
     # 账单/支付类关键词直接命中，避免被分类器误判到产品专家
+    # 注意：这里是「税费/退款/支付」语义，优先于物流判断
     BILLING_HINTS = (
-        "支付", "付款", "信用卡", "退款", "发票", "关税", "增值税", "汇率",
-        "paypal", "payment", "refund", "invoice", "customs", "duty", "duties", "vat",
+        "支付", "付款", "信用卡", "退款", "发票", "关税", "税费", "增值税", "汇率",
+        "paypal", "payment", "refund", "invoice", "duty", "duties", "vat", "tax",
+        "customs fee", "customs tax", "customs charge",
     )
 
     # 物流类问题先用规则命中，省一次模型调用，也保证追踪话术稳定
-    if is_logistics_query(customer_query):
-        query_type = "logistics"
-        print("📦 规则命中：物流追踪")
-    elif any(hint in customer_query.lower() for hint in BILLING_HINTS):
+    if any(hint in customer_query.lower() for hint in BILLING_HINTS):
         query_type = "billing"
         print("💳 规则命中：账单/支付")
+    elif is_logistics_query(customer_query):
+        query_type = "logistics"
+        print("📦 规则命中：物流追踪")
     else:
         try:
             llm_instance = get_llm()

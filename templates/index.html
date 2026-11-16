@@ -243,7 +243,7 @@
         }
         .msg.assistant .bubble pre code { background: transparent; padding: 0; }
         .msg.assistant .bubble a { color: var(--brand); }
-        .msg .meta { font-size: 11px; color: var(--text-faint); margin-top: 6px; }
+        .msg .meta { font-size: 11px; color: var(--text-faint); margin-top: 6px; white-space: nowrap; }
 
         /* thinking block */
         .think {
@@ -843,7 +843,9 @@
         return text
             .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
             .replace(/`([^`]+)`/g, '<code>$1</code>')
-            .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+            .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+            // 非 http(s) 的 Markdown 链接（如模型编造的 # 链接）降级为纯文本
+            .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
     }
 
     function addMessage(role, content, ts, reasoning, elapsed, agent) {
