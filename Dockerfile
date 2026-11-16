@@ -10,17 +10,19 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 魔搭创空间的构建机在国内，默认走清华源；海外平台可用 build-arg 覆盖
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+# 魔搭构建机在香港：官方 PyPI 更快；失败自动回退阿里云镜像。
+# 本地 compose 通过 build-arg 指定清华源。
+ARG PIP_INDEX_URL=https://pypi.org/simple
 ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt gunicorn
+RUN pip install --no-cache-dir --retries 5 --timeout 60 -r requirements.txt gunicorn \
+    || pip install --no-cache-dir --retries 5 --timeout 60 \
+         -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt gunicorn
 
 COPY . .
 RUN chmod +x /app/start.sh && sed -i 's/\r$//' /app/start.sh
 
-# 魔搭 Docker 创空间默认端口 7860；本地 compose 通过 PORT 覆盖
 EXPOSE 7860
 
 CMD ["/app/start.sh"]
