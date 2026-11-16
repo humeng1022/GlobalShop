@@ -186,6 +186,12 @@ def rename_session(session_id):
         return jsonify({'error': f'重命名失败: {e}'}), 500
 
 
+@app.route('/api/sessions/<session_id>/rename', methods=['POST'])
+def rename_session_post(session_id):
+    """POST 别名：魔搭 ms.show 网关会拦截 PATCH/DELETE，改用 POST。"""
+    return rename_session(session_id)
+
+
 @app.route('/api/sessions/<session_id>', methods=['DELETE'])
 def delete_session(session_id):
     """删除会话"""
@@ -198,6 +204,12 @@ def delete_session(session_id):
         return jsonify({'error': f'删除会话失败: {status}'}), 500
     except Exception as e:
         return jsonify({'error': f'服务器错误: {str(e)}'}), 500
+
+
+@app.route('/api/sessions/<session_id>/delete', methods=['POST'])
+def delete_session_post(session_id):
+    """POST 别名：魔搭 ms.show 网关会拦截 DELETE。"""
+    return delete_session(session_id)
 
 
 @app.route('/api/sessions/<session_id>/clear', methods=['POST'])

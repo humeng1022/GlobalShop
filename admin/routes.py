@@ -178,6 +178,13 @@ def api_kb_delete(chunk_id):
         return jsonify({"error": f"删除失败: {e}"}), 500
 
 
+@admin_bp.route("/api/kb/<chunk_id>/delete", methods=["POST"])
+@admin_required
+def api_kb_delete_post(chunk_id):
+    """POST 别名：魔搭网关会拦截 DELETE。"""
+    return api_kb_delete(chunk_id)
+
+
 @admin_bp.route("/api/kb/reindex", methods=["POST"])
 @admin_required
 def api_kb_reindex():
@@ -229,3 +236,10 @@ def api_tracking_delete(number):
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": f"删除失败: {e}"}), 500
+
+
+@admin_bp.route("/api/tracking/<number>/delete", methods=["POST"])
+@admin_required
+def api_tracking_delete_post(number):
+    """POST 别名：魔搭网关会拦截 DELETE。"""
+    return api_tracking_delete(number)

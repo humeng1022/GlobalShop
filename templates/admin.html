@@ -292,7 +292,7 @@
 
     async function delKb(id) {
         if (!confirm('删除这条知识？')) return;
-        try { await api('/admin/api/kb/' + encodeURIComponent(id), { method: 'DELETE' }); await loadKb(); }
+        try { await api('/admin/api/kb/' + encodeURIComponent(id) + '/delete', { method: 'POST' }); await loadKb(); }
         catch (e) { alert('删除失败: ' + e.message); }
     }
 
@@ -336,7 +336,7 @@
 
     async function delTracking(number) {
         if (!confirm('删除该运单？')) return;
-        try { await api('/admin/api/tracking/' + encodeURIComponent(number), { method: 'DELETE' }); await loadTracking(); }
+        try { await api('/admin/api/tracking/' + encodeURIComponent(number) + '/delete', { method: 'POST' }); await loadTracking(); }
         catch (e) { alert('删除失败: ' + e.message); }
     }
 

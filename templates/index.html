@@ -735,8 +735,8 @@
         title = title.trim();
         if (!title) return;
         try {
-            var resp = await fetch('/api/sessions/' + encodeURIComponent(sessionId), {
-                method: 'PATCH',
+            var resp = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/rename', {
+                method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ title: title })
             });
@@ -751,7 +751,7 @@
     async function deleteSession(sessionId) {
         if (!window.confirm('删除这个对话？此操作不可恢复。')) return;
         try {
-            var resp = await fetch('/api/sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' });
+            var resp = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/delete', { method: 'POST' });
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
             if (sessionId === currentSessionId) {
                 createNewSession();
