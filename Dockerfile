@@ -2,11 +2,13 @@
 FROM python:3.12-slim
 
 # 魔搭创空间要求容器监听 7860；本地 compose 通过 environment 覆盖为 5000
+# APP_MODE=embedded：图直接跑在 Flask 里，不依赖 127.0.0.1:2024
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     TZ=Asia/Shanghai \
-    PORT=7860
+    PORT=7860 \
+    APP_MODE=embedded
 
 WORKDIR /app
 

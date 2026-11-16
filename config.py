@@ -32,7 +32,9 @@ EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", OPENAI_BASE_URL).rstrip("/"
 EMBEDDING_BATCH_SIZE = _env_int("EMBEDDING_BATCH_SIZE", 16)
 
 # 运行形态：server = 调用独立 LangGraph 服务；embedded = 图内嵌在 Flask 进程
-APP_MODE = os.getenv("APP_MODE", "server").strip().lower()
+# 运行形态：embedded = 图内嵌在 Flask 进程（推荐，无需许可证）；
+#           server   = 调用独立 LangGraph 服务（需 LangGraph Cloud 许可证）
+APP_MODE = os.getenv("APP_MODE", "embedded").strip().lower()
 
 # 数据库：sqlite:///./data/app.db 或 postgresql://...
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/app.db")
