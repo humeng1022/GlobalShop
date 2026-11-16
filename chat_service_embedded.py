@@ -162,14 +162,35 @@ def fetch_sessions_list() -> Tuple[Optional[List[Dict[str, Any]]], Optional[str]
     return sessions, None
 
 
+def _load_state(session_id: str):
+    """兼容旧数据：先按原 ID 读，失败再按 UUID 映射读（Postgres 的 thread_id 是 UUID）。"""
+    candidates = [session_id]
+    converted = _checkpoint_thread_id(session_id)
+    if converted != session_id:
+        candidates.append(converted)
+
+    last_error = None
+    for tid in candidates:
+        try:
+            return graph_runtime.get_state_sync({"configurable": {"thread_id": tid}})
+        except Exception as e:  # 连接失效 / UUID 不合法等
+            last_error = e
+    raise last_error
+
+
 def fetch_session_detail(session_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     if not session_id:
         return None, "缺少会话 ID"
+
+    values: Dict[str, Any] = {}
+    warning = None
     try:
-        state = graph_runtime.get_state_sync({"configurable": {"thread_id": session_id}})
+        state = _load_state(session_id)
         values = state.values if hasattr(state, "values") else {}
     except Exception as e:
-        return None, f"读取会话失败: {e}"
+        # 不让 UI 因为状态读取失败而整体 500；返回空历史并附带 warning
+        print(f"⚠️ 读取会话状态失败（返回空历史）: {e}")
+        warning = str(e)
 
     dialogue = values.get("persisted_dialogue") or []
     history = [
@@ -181,12 +202,15 @@ def fetch_session_detail(session_id: str) -> Tuple[Optional[Dict[str, Any]], Opt
         for item in dialogue
     ]
     meta = get_thread(session_id) or {}
-    return {
+    result = {
         "session_id": session_id,
         "title": meta.get("title") or "",
         "conversation_history": history,
         "current_agent": values.get("current_agent", ""),
-    }, None
+    }
+    if warning:
+        result["warning"] = warning
+    return result, None
 
 
 def delete_remote_thread(session_id: str) -> Tuple[bool, int]:
@@ -198,11 +222,16 @@ def delete_remote_thread(session_id: str) -> Tuple[bool, int]:
         print(f"删除会话元数据失败: {e}")
         return False, 500
 
-    # 尽力删除 checkpoint（不同版本 API 可能不存在）
+    # 尽力删除 checkpoint（兼容旧 ID 与 UUID 映射）
+    candidates = {session_id, _checkpoint_thread_id(session_id)}
     try:
-        saver = getattr(_graph(), "checkpointer", None)
+        saver = getattr(graph_runtime.get_graph(), "checkpointer", None)
         if saver is not None and hasattr(saver, "delete_thread"):
-            saver.delete_thread(session_id)
+            for tid in candidates:
+                try:
+                    saver.delete_thread(tid)
+                except Exception as e:
+                    print(f"删除 checkpoint {tid} 失败（忽略）: {e}")
     except Exception as e:
         print(f"删除 checkpoint 失败（忽略）: {e}")
 
