@@ -2,7 +2,17 @@
 title: GlobalShop AI 客服中心
 sdk: docker
 app_port: 7860
-license: Apache-2.0
+license: Apache License 2.0
+
+# ModelScope 创空间元数据（可选）
+domain:
+  - nlp
+tags:
+  - customer-service
+  - rag
+  - e-commerce
+datasets:
+models:
 ---
 
 # GlobalShop AI 客服中心
